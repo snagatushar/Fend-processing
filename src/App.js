@@ -5,11 +5,13 @@ import { createClient } from "@supabase/supabase-js";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 
+// ---------------- Supabase Client ----------------
 const supabaseUrl = "https://begfjxlvjaubnizkvruw.supabase.co";
-const supabaseKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJlZ2ZqeGx2amF1Ym5pemt2cnV3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTYwNjM0MzcsImV4cCI6MjA3MTYzOTQzN30.P6s1vWqAhXaNclfQw1NQ8Sj974uQJxAmoYG9mPvpKSQ"; // replace with your key
+const supabaseKey =
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJlZ2ZqeGx2amF1Ym5pemt2cnV3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTYwNjM0MzcsImV4cCI6MjA3MTYzOTQzN30.P6s1vWqAhXaNclfQw1NQ8Sj974uQJxAmoYG9mPvpKSQ";
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-// -------- Helpers --------
+// ---------------- Helpers ----------------
 const safeParse = (val) => {
   if (!val) return [];
   if (typeof val === "string") {
@@ -48,7 +50,7 @@ const normalizeRows = (inv) => {
   return rows;
 };
 
-// -------- PDF Generation --------
+// ---------------- PDF Generation ----------------
 const generatePDFBlob = (invoiceLike) => {
   const rows = normalizeRows(invoiceLike);
   const doc = new jsPDF();
@@ -83,7 +85,7 @@ const generatePDFBlob = (invoiceLike) => {
   return doc.output("blob");
 };
 
-// -------- Invoice Page Component --------
+// ---------------- Invoice Page Component ----------------
 function InvoicePage() {
   const { phone } = useParams();
   const [invoice, setInvoice] = useState(null);
@@ -91,28 +93,24 @@ function InvoicePage() {
   const [editData, setEditData] = useState({});
   const [loading, setLoading] = useState(true);
 
+  // Fetch single invoice based on phone (private)
   const fetchInvoice = async () => {
+    setLoading(true);
     const { data, error } = await supabase.from("backend").select("*").eq("phonenumber", phone);
-    if (error) { console.error(error); alert("Failed to load invoice"); return; }
+    if (error) { console.error(error); alert("Failed to load invoice"); setLoading(false); return; }
     setInvoice(data[0] ?? null);
     setLoading(false);
   };
 
   useEffect(() => { fetchInvoice(); }, [phone]);
 
+  // Edit handlers
   const handleEdit = () => {
     const rows = normalizeRows(invoice);
     setEditId(invoice.phonenumber);
-    setEditData({
-      ...invoice,
-      rows,
-    });
+    setEditData({ ...invoice, rows });
   };
-
-  const handleChangeHeader = (field, value) => {
-    setEditData((s) => ({ ...s, [field]: value ?? "" }));
-  };
-
+  const handleChangeHeader = (field, value) => setEditData((s) => ({ ...s, [field]: value ?? "" }));
   const handleRowChange = (index, field, value) => {
     setEditData((s) => {
       const rows = [...s.rows];
@@ -120,20 +118,8 @@ function InvoicePage() {
       return { ...s, rows };
     });
   };
-
-  const addRow = () => {
-    setEditData((s) => ({
-      ...s,
-      rows: [...s.rows, { productname: "", description: "", quantity: "", units: "", rate: "" }],
-    }));
-  };
-
-  const removeRow = (i) => {
-    setEditData((s) => ({
-      ...s,
-      rows: s.rows.filter((_, idx) => idx !== i),
-    }));
-  };
+  const addRow = () => setEditData((s) => ({ ...s, rows: [...s.rows, { productname:"", description:"", quantity:"", units:"", rate:"" }] }));
+  const removeRow = (i) => setEditData((s) => ({ ...s, rows: s.rows.filter((_, idx) => idx !== i) }));
 
   const calcEditTotals = useMemo(() => {
     if (!editId || !editData?.rows) return { lines: [], total: 0 };
@@ -145,9 +131,9 @@ function InvoicePage() {
   const handleSave = async () => {
     try {
       setLoading(true);
-      const rows = (editData.rows || []).filter((r) => {
-        return String(r.productname).trim() || String(r.description).trim() || String(r.quantity).trim() || String(r.units).trim() || String(r.rate).trim();
-      });
+      const rows = (editData.rows || []).filter((r) =>
+        String(r.productname).trim() || String(r.description).trim() || String(r.quantity).trim() || String(r.units).trim() || String(r.rate).trim()
+      );
       const payload = {
         invoice_number: editData.invoice_number ?? "",
         Dealer: editData.Dealer ?? "",
@@ -167,7 +153,7 @@ function InvoicePage() {
       alert("💾 Saved!");
       setEditId(null);
       await fetchInvoice();
-    } catch (e) { console.error(e); alert("❌ Save failed"); } finally { setLoading(false); }
+    } catch(e) { console.error(e); alert("❌ Save failed"); } finally { setLoading(false); }
   };
 
   const handleApprove = async () => {
@@ -175,19 +161,37 @@ function InvoicePage() {
       setLoading(true);
       const rows = normalizeRows(invoice);
       const total = rows.map(r=>num(r.quantity)*num(r.rate)).reduce((a,b)=>a+b,0);
+
+      // Update status in DB
       await supabase.from("backend").update({ status:"APPROVED", amount: total, total: total }).eq("phonenumber", invoice.phonenumber);
 
-      const pdfBlob = generatePDFBlob({ ...invoice, status: "APPROVED" });
+      // Generate PDF
+      const pdfBlob = generatePDFBlob({ ...invoice, status:"APPROVED" });
       const fileName = `invoice_${invoice.phonenumber}.pdf`;
       const { error: uploadError } = await supabase.storage.from("invoices").upload(fileName, pdfBlob, { contentType:"application/pdf", upsert:true });
       if(uploadError) throw uploadError;
+
+      // Get public URL & save
       const { data: urlData } = supabase.storage.from("invoices").getPublicUrl(fileName);
       const pdfUrl = urlData.publicUrl;
       await supabase.from("backend").update({ pdf_url: pdfUrl }).eq("phonenumber", invoice.phonenumber);
 
-      alert("✅ Invoice approved & PDF uploaded!");
+      // Trigger webhook
+      await fetch("https://n8n-image2doc-u35379.vm.elestio.app/webhook/f06adee0-b5f2-40f4-a293-4ec1067a14b0", {
+        method: "POST",
+        headers: { "Content-Type":"application/json" },
+        body: JSON.stringify({
+          event:"invoice_approved",
+          invoice_number: invoice.invoice_number,
+          phonenumber: invoice.phonenumber,
+          total,
+          pdf_url: pdfUrl
+        }),
+      });
+
+      alert("✅ Approved, PDF uploaded & webhook sent!");
       await fetchInvoice();
-    } catch (e) { console.error(e); alert("❌ Approve failed"); } finally { setLoading(false); }
+    } catch(e) { console.error(e); alert("❌ Approve failed"); } finally { setLoading(false); }
   };
 
   if(loading) return <p style={{textAlign:"center"}}>Loading...</p>;
@@ -281,13 +285,13 @@ function InvoicePage() {
   );
 }
 
-// -------- Main App with Router --------
+// ---------------- Main App with Router ----------------
 export default function App() {
   return (
     <Router>
       <Routes>
         <Route path="/:phone" element={<InvoicePage />} />
-        <Route path="/" element={<p style={{textAlign:'center',marginTop:50}}>Welcome! Enter /PHONE_NUMBER in URL to view invoice.</p>} />
+        <Route path="/" element={<p style={{textAlign:'center',marginTop:50}}>Enter /PHONE_NUMBER in URL to view your invoice.</p>} />
       </Routes>
     </Router>
   );
