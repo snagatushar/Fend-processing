@@ -11,3 +11,33 @@ code {
   font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New',
     monospace;
 }
+
+/* Mobile-friendly input improvements */
+input[type="text"],
+input[type="tel"],
+input[type="date"],
+input[type="number"],
+input:not([type]) {
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  appearance: none;
+  border-radius: 6px;
+}
+
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  opacity: 1;
+  height: 30px;
+}
+
+/* Prevent zoom on iOS when focusing inputs */
+@media screen and (max-width: 768px) {
+  input[type="text"],
+  input[type="tel"],
+  input[type="date"],
+  input[type="number"],
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
+}
