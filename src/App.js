@@ -1,14 +1,18 @@
 // App.js
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useState, useMemo, useCallback } from "react";
 import { BrowserRouter as Router, Routes, Route, useParams } from "react-router-dom";
 import { createClient } from "@supabase/supabase-js";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 
 // ---------------- Supabase Client ----------------
-const supabaseUrl = "https://begfjxlvjaubnizkvruw.supabase.co";
-const supabaseKey =
-  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJlZ2ZqeGx2amF1Ym5pemt2cnV3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTYwNjM0MzcsImV4cCI6MjA3MTYzOTQzN30.P6s1vWqAhXaNclfQw1NQ8Sj974uQJxAmoYG9mPvpKSQ";
+const supabaseUrl = process.env.REACT_APP_SUPABASE_URL;
+const supabaseKey = process.env.REACT_APP_SUPABASE_ANON_KEY;
+
+if (!supabaseUrl || !supabaseKey) {
+  throw new Error("Missing Supabase environment variables. Please check your .env file.");
+}
+
 const supabase = createClient(supabaseUrl, supabaseKey);
 
 // ---------------- Helpers ----------------
@@ -20,7 +24,6 @@ const safeParse = (val) => {
   if (Array.isArray(val)) return val;
   return [];
 };
-const toUpperIfString = (v) => (typeof v === "string" ? v.toUpperCase() : v);
 const num = (v) => {
   if (v === null || v === undefined) return 0;
   if (typeof v === "number") return isNaN(v) ? 0 : v;
@@ -92,17 +95,30 @@ function InvoicePage() {
   const [editId, setEditId] = useState(null);
   const [editData, setEditData] = useState({});
   const [loading, setLoading] = useState(true);
+  const [pending, setPending] = useState([]);
 
   // Fetch single invoice based on phone (private)
-  const fetchInvoice = async () => {
+  const fetchInvoice = useCallback(async () => {
     setLoading(true);
     const { data, error } = await supabase.from("backend").select("*").eq("phonenumber", phone);
     if (error) { console.error(error); alert("Failed to load invoice"); setLoading(false); return; }
     setInvoice(data[0] ?? null);
     setLoading(false);
-  };
+  }, [phone]);
 
-  useEffect(() => { fetchInvoice(); }, [phone]);
+  useEffect(() => { fetchInvoice(); }, [fetchInvoice]);
+
+  // Fetch not approved invoices for sidebar
+  useEffect(() => {
+    (async () => {
+      const { data, error } = await supabase
+        .from("backend")
+        .select("phonenumber, Dealer, status, amount")
+        .neq("status", "APPROVED")
+        .order("phonenumber", { ascending: true });
+      if (!error && Array.isArray(data)) setPending(data);
+    })();
+  }, []);
 
   // Edit handlers
   const handleEdit = () => {
@@ -177,17 +193,20 @@ function InvoicePage() {
       await supabase.from("backend").update({ pdf_url: pdfUrl }).eq("phonenumber", invoice.phonenumber);
 
       // Trigger webhook
-      await fetch("https://n8n-image2doc-u35379.vm.elestio.app/webhook/f06adee0-b5f2-40f4-a293-4ec1067a14b0", {
-        method: "POST",
-        headers: { "Content-Type":"application/json" },
-        body: JSON.stringify({
-          event:"invoice_approved",
-          invoice_number: invoice.invoice_number,
-          phonenumber: invoice.phonenumber,
-          total,
-          pdf_url: pdfUrl
-        }),
-      });
+      const webhookUrl = process.env.REACT_APP_WEBHOOK_URL;
+      if (webhookUrl) {
+        await fetch(webhookUrl, {
+          method: "POST",
+          headers: { "Content-Type":"application/json" },
+          body: JSON.stringify({
+            event:"invoice_approved",
+            invoice_number: invoice.invoice_number,
+            phonenumber: invoice.phonenumber,
+            total,
+            pdf_url: pdfUrl
+          }),
+        });
+      }
 
       alert("✅ Approved, PDF uploaded & webhook sent!");
       await fetchInvoice();
@@ -201,9 +220,36 @@ function InvoicePage() {
   const total = rows.map(r=>num(r.quantity)*num(r.rate)).reduce((a,b)=>a+b,0);
   const isEditing = editId === invoice.phonenumber;
 
+  // shared styles
+  const cellPad = { padding:6, border:"1px solid #ddd" };
+  const tableBase = { width:"100%", borderCollapse:"collapse", marginTop:10, tableLayout:"fixed" };
+  const inputBase = { width:"100%", padding:6, boxSizing:"border-box", border:"1px solid #ccc", height:32 };
+
   return (
-    <div style={{ padding:30, fontFamily:"Segoe UI, sans-serif", background:"#f7f7f7", minHeight:"100vh", display:"flex", justifyContent:"center" }}>
-      <div style={{ width:"100%", maxWidth:800, background:"#fff", borderRadius:12, boxShadow:"0 8px 16px rgba(0,0,0,0.1)", padding:20, opacity: loading ? 0.6 : 1 }}>
+    <div style={{ padding:30, fontFamily:"Segoe UI, sans-serif", background:"#f7f7f7", minHeight:"100vh", display:"flex", gap:20 }}>
+      {/* Sidebar - Not approved list */}
+      <div style={{ width:260 }}>
+        <div style={{ background:"#fff", borderRadius:12, boxShadow:"0 8px 16px rgba(0,0,0,0.08)", padding:16 }}>
+          <div style={{ fontWeight:600, marginBottom:10 }}>Not approved</div>
+          <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
+            {pending.length === 0 && <div style={{ color:"#888" }}>All approved</div>}
+            {pending.map((p)=>{
+              const isActive = String(p.phonenumber) === String(phone);
+              return (
+                <a key={p.phonenumber} href={`/${p.phonenumber}`} style={{ textDecoration:"none" }}>
+                  <div style={{ border:"1px solid #eee", borderRadius:10, padding:10, background:isActive?"#f0f6ff":"#fafafa" }}>
+                    <div style={{ color:"#0b5", fontWeight:600 }}>{p.phonenumber}</div>
+                    <div style={{ fontSize:12, color:"#666" }}>{p.Dealer || "Unknown"}</div>
+                  </div>
+                </a>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+
+      {/* Main invoice card */}
+      <div style={{ flex:1, maxWidth:900, background:"#fff", borderRadius:12, boxShadow:"0 8px 16px rgba(0,0,0,0.1)", padding:20, opacity: loading ? 0.6 : 1 }}>
         <h2 style={{marginBottom:10}}>INVOICE: {isEditing ? <input value={editData.invoice_number ?? ""} onChange={e=>handleChangeHeader("invoice_number", e.target.value)} style={{width:220}}/> : invoice.invoice_number}</h2>
 
         {isEditing ? (
@@ -223,16 +269,25 @@ function InvoicePage() {
           </p>
         )}
 
-        <table style={{ width:"100%", borderCollapse:"collapse", marginTop:10 }}>
+        <table style={tableBase}>
+          <colgroup>
+            <col style={{ width:"28%" }} />
+            <col style={{ width:"28%" }} />
+            <col style={{ width:"10%" }} />
+            <col style={{ width:"10%" }} />
+            <col style={{ width:"12%" }} />
+            <col style={{ width:"12%" }} />
+            {isEditing && <col style={{ width:"10%" }} />}
+          </colgroup>
           <thead>
             <tr style={{background:"#f0f0f0", fontWeight:"bold"}}>
-              <th style={{padding:6,border:"1px solid #ddd"}}>PRODUCT</th>
-              <th style={{padding:6,border:"1px solid #ddd"}}>DESCRIPTION</th>
-              <th style={{padding:6,border:"1px solid #ddd"}}>QUANTITY</th>
-              <th style={{padding:6,border:"1px solid #ddd"}}>UNITS</th>
-              <th style={{padding:6,border:"1px solid #ddd"}}>RATE</th>
-              <th style={{padding:6,border:"1px solid #ddd"}}>AMOUNT</th>
-              {isEditing && <th style={{padding:6,border:"1px solid #ddd"}}>ACTION</th>}
+              <th style={cellPad}>PRODUCT</th>
+              <th style={cellPad}>DESCRIPTION</th>
+              <th style={cellPad}>QUANTITY</th>
+              <th style={cellPad}>UNITS</th>
+              <th style={cellPad}>RATE</th>
+              <th style={cellPad}>AMOUNT</th>
+              {isEditing && <th style={cellPad}>ACTION</th>}
             </tr>
           </thead>
           <tbody>
@@ -242,31 +297,31 @@ function InvoicePage() {
                 <tr key={i}>
                   {isEditing ? (
                     <>
-                      <td><input value={r.productname ?? ""} onChange={e=>handleRowChange(i,"productname",e.target.value)}/></td>
-                      <td><input value={r.description ?? ""} onChange={e=>handleRowChange(i,"description",e.target.value)}/></td>
-                      <td><input value={r.quantity ?? ""} onChange={e=>handleRowChange(i,"quantity",e.target.value)}/></td>
-                      <td><input value={r.units ?? ""} onChange={e=>handleRowChange(i,"units",e.target.value)}/></td>
-                      <td><input value={r.rate ?? ""} onChange={e=>handleRowChange(i,"rate",e.target.value)}/></td>
-                      <td>{amount.toFixed(2)}</td>
-                      <td><button onClick={()=>removeRow(i)}>Remove</button></td>
+                      <td style={cellPad}><input value={r.productname ?? ""} onChange={e=>handleRowChange(i,"productname",e.target.value)} style={inputBase}/></td>
+                      <td style={cellPad}><input value={r.description ?? ""} onChange={e=>handleRowChange(i,"description",e.target.value)} style={inputBase}/></td>
+                      <td style={cellPad}><input value={r.quantity ?? ""} onChange={e=>handleRowChange(i,"quantity",e.target.value)} style={{...inputBase, textAlign:"right"}}/></td>
+                      <td style={cellPad}><input value={r.units ?? ""} onChange={e=>handleRowChange(i,"units",e.target.value)} style={inputBase}/></td>
+                      <td style={cellPad}><input value={r.rate ?? ""} onChange={e=>handleRowChange(i,"rate",e.target.value)} style={{...inputBase, textAlign:"right"}}/></td>
+                      <td style={{...cellPad, textAlign:"right"}}>{amount.toFixed(2)}</td>
+                      <td style={cellPad}><button onClick={()=>removeRow(i)}>Remove</button></td>
                     </>
                   ) : (
                     <>
-                      <td>{r.productname}</td>
-                      <td>{r.description}</td>
-                      <td>{r.quantity}</td>
-                      <td>{r.units}</td>
-                      <td>{r.rate}</td>
-                      <td>{amount.toFixed(2)}</td>
+                      <td style={cellPad}>{r.productname}</td>
+                      <td style={cellPad}>{r.description}</td>
+                      <td style={{...cellPad, textAlign:"right"}}>{r.quantity}</td>
+                      <td style={cellPad}>{r.units}</td>
+                      <td style={{...cellPad, textAlign:"right"}}>{r.rate}</td>
+                      <td style={{...cellPad, textAlign:"right"}}>{amount.toFixed(2)}</td>
                     </>
                   )}
                 </tr>
               )
             })}
             <tr>
-              <td colSpan={5} style={{textAlign:"right", fontWeight:"bold", padding:8}}>TOTAL</td>
-              <td style={{fontWeight:"bold", padding:8}}>{isEditing ? calcEditTotals.total.toFixed(2) : total.toFixed(2)}</td>
-              {isEditing && <td></td>}
+              <td colSpan={5} style={{...cellPad, textAlign:"right", fontWeight:"bold"}}>TOTAL</td>
+              <td style={{...cellPad, fontWeight:"bold", textAlign:"right"}}>{isEditing ? calcEditTotals.total.toFixed(2) : total.toFixed(2)}</td>
+              {isEditing && <td style={cellPad}></td>}
             </tr>
           </tbody>
         </table>
